@@ -656,22 +656,6 @@ public class MCCPSolver {
     // ---------- esempio di utilizzo ----------
 
     public static void main(String[] args) {
-/*
-        // Test deterministico di sanita' sull'esempio della Figura 1 del paper
-        runWeightedStExample();
-        System.out.println();
-
-        // Test su istanze completamente casuali: grafo, colori, costi e nodi
-        // s/t sono diversi ad ogni esecuzione del programma.
-        MCCPSolver piccolo = generateRandomInstance(50, 10, Density.LOW, 0.10);
-        runAllAlgorithms("Istanza casuale piccola (densita' bassa)", piccolo, 1000);
-        System.out.println();
-
-        MCCPSolver media = generateRandomInstance(50, 12, Density.MEDIUM, 0.15);
-        runAllAlgorithms("Istanza casuale media (densita' media)", media, 1000);
-        System.out.println();
-
- */
         for(int i = 0; i<10 ;i++){
             System.out.println("######################################################################################################################");
             System.out.println("Numero iterazione:"+ i);
@@ -680,48 +664,6 @@ public class MCCPSolver {
             System.out.println();
         }
 
-    }
-
-    private static void runWeightedStExample() {
-        List<Edge> edges = new ArrayList<>();
-
-        edges.add(new Edge(0, 1, 0));
-        edges.add(new Edge(0, 2, 1));
-        edges.add(new Edge(1, 2, 2));
-        edges.add(new Edge(1, 3, 0));
-        edges.add(new Edge(3, 2, 1));
-
-        edges.add(new Edge(4, 5, 0));
-        edges.add(new Edge(4, 6, 1));
-        edges.add(new Edge(5, 6, 2));
-        edges.add(new Edge(5, 7, 0));
-        edges.add(new Edge(7, 6, 1));
-
-        edges.add(new Edge(0, 4, 2));
-        edges.add(new Edge(2, 6, 1));
-        edges.add(new Edge(3, 7, 2));
-
-        double[] colorCost = { 5.0, 2.0, 8.0 }; // colore1=5, colore2=2, colore3=8
-
-        int sourceNode = 0;
-        int targetNode = 6;
-
-        MCCPSolver solver = new MCCPSolver(8, edges, 3, colorCost, sourceNode, targetNode);
-
-        MCCPResult resultGreedy = solver.solve(500);
-        MCCPResult resultProbabilistic = solver.solveProbabilistic(500);
-
-        System.out.println("[Minimum Color s-t Cut pesato: separare il nodo " + sourceNode
-                + " dal nodo " + targetNode + "]");
-
-        System.out.println("VNS-Greedy        -> " + resultGreedy);
-        solver.verifyCutWithBFS(resultGreedy.cutColors, true);
-
-        System.out.println("VNS-Probabilistic -> " + resultProbabilistic);
-        solver.verifyCutWithBFS(resultProbabilistic.cutColors, true);
-
-        System.out.println("Atteso (verificato per enumerazione esaustiva su questo grafo/costi): "
-                + "costo = 7.0, colori nel taglio = [0, 1] (colore1 + colore2)");
     }
 
     /**
@@ -861,16 +803,5 @@ public class MCCPSolver {
         MCCPResult resultProbabilistic = solver.solveProbabilistic(maxRunningTimeMillis);
         System.out.println("VNS-Probabilistic -> " + resultProbabilistic);
         solver.verifyCutWithBFS(resultProbabilistic.cutColors, true);
-
-        // la forza bruta ha costo 2^numColors: fattibile solo con pochi colori
-        if (solver.getNumColors() <= 24) {
-            MCCPResult resultExact = solver.bruteForceOptimal();
-            System.out.println("Ottimo esatto     -> " + resultExact + "  [forza bruta]");
-            solver.verifyCutWithBFS(resultExact.cutColors, true);
-        } else {
-            System.out.println("(Con " + solver.getNumColors() + " colori la forza bruta (2^"
-                    + solver.getNumColors() + " sottoinsiemi) non e' fattibile: "
-                    + "correttezza controllata solo con verifyCutWithBFS.)");
-        }
     }
 }
