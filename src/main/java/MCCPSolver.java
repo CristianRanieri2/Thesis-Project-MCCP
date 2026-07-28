@@ -120,6 +120,15 @@ public class MCCPSolver {
         this.t = targetNode;
     }
 
+    // ---------- getter (utili per stampare informazioni sull'istanza) ----------
+
+    public int getNumNodes() { return numNodes; }
+    public int getNumEdges() { return edges.size(); }
+    public int getNumColors() { return numColors; }
+    public double[] getColorCost() { return colorCost.clone(); }
+    public int getSourceNode() { return s; }
+    public int getTargetNode() { return t; }
+
     // ---------- Union-Find (disjoint-set) con path compression e union by rank ----------
 
     static class UnionFind {
@@ -384,25 +393,33 @@ public class MCCPSolver {
         public final int cutSize;
         public final Set<Integer> cutColors;
         public final Set<Integer> keptColors;
+        /** Tempo (ms) trascorso da inizio esecuzione fino all'ULTIMO miglioramento di BestS ("time-to-best"). */
+        public final long timeToBestMs;
+        /** Tempo TOTALE (ms) di esecuzione del metodo (rispetta sempre il budget massimo passato). */
+        public final long totalTimeMs;
 
-        MCCPResult(Set<Integer> cutColors, Set<Integer> keptColors, double cutCost) {
+        MCCPResult(Set<Integer> cutColors, Set<Integer> keptColors, double cutCost,
+                   long timeToBestMs, long totalTimeMs) {
             this.cutColors = Collections.unmodifiableSet(new TreeSet<>(cutColors));
             this.keptColors = Collections.unmodifiableSet(new TreeSet<>(keptColors));
             this.cutSize = cutColors.size();
             this.cutCost = cutCost;
+            this.timeToBestMs = timeToBestMs;
+            this.totalTimeMs = totalTimeMs;
         }
 
         @Override
         public String toString() {
             return "costo del taglio = " + cutCost + ", colori nel taglio = " + cutColors
-                    + " (" + cutSize + " colori; colori mantenuti: " + keptColors + ")";
+                    + " (" + cutSize + " colori; colori mantenuti: " + keptColors + ")"
+                    + "\n" +" [time-to-best = " + timeToBestMs + " ms, tempo totale = " + totalTimeMs + " ms]";
         }
     }
 
-    private MCCPResult buildResult(Set<Integer> bestS) {
+    private MCCPResult buildResult(Set<Integer> bestS, long timeToBestMs, long totalTimeMs) {
         Set<Integer> cutColors = diff(allColors(), bestS);
         double cutCost = weight(cutColors);
-        return new MCCPResult(cutColors, bestS, cutCost);
+        return new MCCPResult(cutColors, bestS, cutCost, timeToBestMs, totalTimeMs);
     }
 
     // ---------- Algoritmo 1: General algorithm ----------
@@ -413,6 +430,7 @@ public class MCCPSolver {
 
         Set<Integer> bestS = generateInitialSolutionGreedy();
         int maxNeighborhood = numColors - bestS.size();
+        long timeToBestMs = System.currentTimeMillis() - startTime; // prima soluzione trovata
 
         do {
             Set<Integer> s = newSolutionGreedy(bestS);
@@ -420,6 +438,7 @@ public class MCCPSolver {
             while (weight(s) > weight(bestS)) {
                 bestS = new HashSet<>(s);
                 maxNeighborhood = numColors - bestS.size();
+                timeToBestMs = System.currentTimeMillis() - startTime;
                 s = newSolutionGreedy(bestS);
             }
 
@@ -448,11 +467,13 @@ public class MCCPSolver {
             if (weight(s) > weight(bestS)) {
                 bestS = new HashSet<>(s);
                 maxNeighborhood = numColors - bestS.size();
+                timeToBestMs = System.currentTimeMillis() - startTime;
             }
 
         } while (System.currentTimeMillis() - startTime <= maxRunningTimeMillis);
 
-        return buildResult(bestS);
+        long totalTimeMs = System.currentTimeMillis() - startTime;
+        return buildResult(bestS, timeToBestMs, totalTimeMs);
     }
 
     public MCCPResult solveProbabilistic(long maxRunningTimeMillis) {
@@ -461,6 +482,7 @@ public class MCCPSolver {
 
         Set<Integer> bestS = generateInitialSolutionProbabilistic(rnd);
         int maxNeighborhood = numColors - bestS.size();
+        long timeToBestMs = System.currentTimeMillis() - startTime;
 
         do {
             Set<Integer> s = newSolutionProbabilistic(bestS, rnd);
@@ -468,6 +490,7 @@ public class MCCPSolver {
             while (weight(s) > weight(bestS)) {
                 bestS = new HashSet<>(s);
                 maxNeighborhood = numColors - bestS.size();
+                timeToBestMs = System.currentTimeMillis() - startTime;
                 s = newSolutionProbabilistic(bestS, rnd);
             }
 
@@ -496,11 +519,13 @@ public class MCCPSolver {
             if (weight(s) > weight(bestS)) {
                 bestS = new HashSet<>(s);
                 maxNeighborhood = numColors - bestS.size();
+                timeToBestMs = System.currentTimeMillis() - startTime;
             }
 
         } while (System.currentTimeMillis() - startTime <= maxRunningTimeMillis);
 
-        return buildResult(bestS);
+        long totalTimeMs = System.currentTimeMillis() - startTime;
+        return buildResult(bestS, timeToBestMs, totalTimeMs);
     }
 
     // ---------- Validatore esatto (solo per un numero contenuto di colori) ----------
@@ -516,8 +541,10 @@ public class MCCPSolver {
             throw new IllegalStateException(
                     "bruteForceOptimal e' pensato solo per istanze di test con pochi colori (<= 24)");
         }
+        long startTime = System.currentTimeMillis();
         Set<Integer> bestKept = new HashSet<>();
         double bestWeight = -1.0;
+        long timeToBestMs = 0;
         int totalMasks = 1 << numColors;
         for (int mask = 0; mask < totalMasks; mask++) {
             Set<Integer> candidate = new HashSet<>();
@@ -529,10 +556,87 @@ public class MCCPSolver {
                 if (w > bestWeight) {
                     bestWeight = w;
                     bestKept = candidate;
+                    timeToBestMs = System.currentTimeMillis() - startTime;
                 }
             }
         }
-        return buildResult(bestKept);
+        long totalTimeMs = System.currentTimeMillis() - startTime;
+        return buildResult(bestKept, timeToBestMs, totalTimeMs);
+    }
+
+    // ---------- Verificatore indipendente della soluzione (rimozione archi + BFS) ----------
+
+    /**
+     * Verifica la correttezza di una soluzione in modo del tutto indipendente
+     * dalla logica interna del solver (non usa Union-Find/isFeasible): dato
+     * l'insieme di colori scelti come taglio (cutColors), costruisce il
+     * sottografo eliminando TUTTI gli archi che hanno almeno uno di quei
+     * colori, poi esegue una visita BFS a partire dal nodo sorgente s.
+     * Se la BFS NON riesce a raggiungere t, il taglio e' valido (s e t
+     * risultano effettivamente separati); se lo raggiunge, il taglio NON e'
+     * valido.
+     *
+     * Nota sulla coerenza con la semantica multi-colore: un arco viene
+     * eliminato se almeno uno dei suoi colori e' nel taglio, cioe' se
+     * NON e' vero che tutti i suoi colori sono "mantenuti" (Colors(e) ⊆
+     * keptColors) — coerente con quanto usato internamente dal solver
+     * (vedi connected()/isFeasible()).
+     *
+     * @param cutColors insieme dei colori rimossi (il taglio da verificare)
+     * @param verbose   se true, stampa i dettagli della verifica (nodi
+     *                  visitati dalla BFS, archi rimossi, esito)
+     * @return true se il taglio e' valido (t NON raggiungibile da s), false altrimenti
+     */
+    public boolean verifyCutWithBFS(Set<Integer> cutColors, boolean verbose) {
+        // costruisce la lista di adiacenza del sottografo che sopravvive alla rimozione:
+        // un arco sopravvive se NESSUNO dei suoi colori e' nel taglio (cutColors)
+        List<List<Integer>> adjacency = new ArrayList<>();
+        for (int i = 0; i < numNodes; i++) adjacency.add(new ArrayList<>());
+
+        int removedEdges = 0;
+        for (Edge e : edges) {
+            if (Collections.disjoint(e.colors, cutColors)) {
+                adjacency.get(e.u).add(e.v);
+                adjacency.get(e.v).add(e.u);
+            } else {
+                removedEdges++;
+            }
+        }
+
+        // BFS a partire dal nodo sorgente s
+        boolean[] visited = new boolean[numNodes];
+        Deque<Integer> queue = new ArrayDeque<>();
+        List<Integer> visitOrder = new ArrayList<>();
+
+        visited[s] = true;
+        queue.add(s);
+        while (!queue.isEmpty()) {
+            int u = queue.poll();
+            visitOrder.add(u);
+            for (int v : adjacency.get(u)) {
+                if (!visited[v]) {
+                    visited[v] = true;
+                    queue.add(v);
+                }
+            }
+        }
+
+        boolean tRaggiunto = visited[t];
+        boolean valida = !tRaggiunto;
+
+        if (verbose) {
+            if (numNodes <= 60) {
+                System.out.println("  Nodi raggiunti dalla BFS a partire da s=" + s + ": "
+                        + visitOrder.size() + "/" + numNodes + " -> " + visitOrder);
+            } else {
+                // su grafi grandi evitiamo di stampare la lista completa dei nodi visitati
+                System.out.println("  Nodi raggiunti dalla BFS a partire da s=" + s + ": "
+                        + visitOrder.size() + "/" + numNodes);
+            }
+            System.out.println("Esito della soluzione:"  + (valida ? "VALIDA" : "NON VALIDA"));
+        }
+
+        return valida;
     }
 
     // ---------- utilità ----------
@@ -552,27 +656,30 @@ public class MCCPSolver {
     // ---------- esempio di utilizzo ----------
 
     public static void main(String[] args) {
+/*
+        // Test deterministico di sanita' sull'esempio della Figura 1 del paper
         runWeightedStExample();
         System.out.println();
-        runLargeRandomExample(
-                "Esempio grande #1 (50 nodi)",
-                50,      // numNodes
-                10,      // numColors
-                90,      // numExtraEdges (oltre allo spanning tree, che garantisce la connettivita')
-                0.10,    // probabilita' che un arco extra sia multi-colore
-                0, 49,   // sourceNode, targetNode
-                12345L   // seed (per riproducibilita')
-        );
+
+        // Test su istanze completamente casuali: grafo, colori, costi e nodi
+        // s/t sono diversi ad ogni esecuzione del programma.
+        MCCPSolver piccolo = generateRandomInstance(50, 10, Density.LOW, 0.10);
+        runAllAlgorithms("Istanza casuale piccola (densita' bassa)", piccolo, 1000);
         System.out.println();
-        runLargeRandomExample(
-                "Esempio grande #2 (50 nodi)",
-                50,
-                12,
-                110,
-                0.15,
-                5, 44,
-                67890L
-        );
+
+        MCCPSolver media = generateRandomInstance(50, 12, Density.MEDIUM, 0.15);
+        runAllAlgorithms("Istanza casuale media (densita' media)", media, 1000);
+        System.out.println();
+
+ */
+        for(int i = 0; i<10 ;i++){
+            System.out.println("######################################################################################################################");
+            System.out.println("Numero iterazione:"+ i);
+            MCCPSolver grande = generateRandomInstance(500, 125, Density.HIGH, 0.10);
+            runAllAlgorithms("Istanza casuale grande (densita' alta)", grande, 200000);
+            System.out.println();
+        }
+
     }
 
     private static void runWeightedStExample() {
@@ -606,25 +713,44 @@ public class MCCPSolver {
 
         System.out.println("[Minimum Color s-t Cut pesato: separare il nodo " + sourceNode
                 + " dal nodo " + targetNode + "]");
+
         System.out.println("VNS-Greedy        -> " + resultGreedy);
+        solver.verifyCutWithBFS(resultGreedy.cutColors, true);
+
         System.out.println("VNS-Probabilistic -> " + resultProbabilistic);
+        solver.verifyCutWithBFS(resultProbabilistic.cutColors, true);
+
         System.out.println("Atteso (verificato per enumerazione esaustiva su questo grafo/costi): "
                 + "costo = 7.0, colori nel taglio = [0, 1] (colore1 + colore2)");
     }
 
     /**
+     * Livello di densita' degli archi del grafo generato casualmente, sul
+     * modello del parametro d usato nel paper (Sezione 3): il numero atteso
+     * di archi e' d * |V| * (|V|-1) / 2. Qui i tre livelli usano i valori
+     * LOW = 0.3, MEDIUM = 0.5, HIGH = 0.8.
+     */
+    public enum Density {
+        LOW(0.3), MEDIUM(0.5), HIGH(0.8);
+
+        public final double value;
+
+        Density(double value) {
+            this.value = value;
+        }
+    }
+
+    /**
      * Genera un grafo casuale ma CONNESSO: prima uno spanning tree casuale
-     * (che garantisce la connettivita' complessiva), poi numExtraEdges archi
-     * aggiuntivi tra coppie di nodi casuali, ciascuno con probabilita'
+     * (che garantisce la connettivita' complessiva), poi archi aggiuntivi
+     * fino a raggiungere circa density * numNodes * (numNodes-1) / 2 archi
+     * totali (compresi quelli dello spanning tree), ciascuno con probabilita'
      * multiColorProb di avere un secondo colore (arco multi-colore).
      */
-    private static List<Edge> generateRandomGraph(int numNodes, int numColors, int numExtraEdges,
+    private static List<Edge> generateRandomGraph(int numNodes, int numColors, double density,
                                                   double multiColorProb, Random rnd) {
         List<Edge> edges = new ArrayList<>();
 
-        // 1) spanning tree casuale: connette il nodo i-esimo (in un ordine casuale)
-        // a un nodo scelto a caso fra quelli gia' inseriti, cosi' il grafo finale
-        // e' garantito connesso.
         List<Integer> order = new ArrayList<>();
         for (int i = 0; i < numNodes; i++) order.add(i);
         Collections.shuffle(order, rnd);
@@ -636,7 +762,11 @@ public class MCCPSolver {
             edges.add(new Edge(u, v, color));
         }
 
-        // 2) archi extra casuali, per rendere il grafo piu' denso e interessante
+        // numero atteso di archi totali secondo la densita' (come nel paper: d*|V|*(|V|-1)/2);
+        // lo spanning tree ne fornisce gia' numNodes-1, il resto viene aggiunto qui
+        long targetTotalEdges = Math.round(density * numNodes * (numNodes - 1) / 2.0);
+        int numExtraEdges = (int) Math.max(0, targetTotalEdges - (numNodes - 1));
+
         for (int i = 0; i < numExtraEdges; i++) {
             int u = rnd.nextInt(numNodes);
             int v = rnd.nextInt(numNodes);
@@ -654,38 +784,93 @@ public class MCCPSolver {
     }
 
     /**
-     * Genera un'istanza casuale di dimensioni maggiori (es. 50 nodi), la
-     * risolve con VNS-Greedy e VNS-Probabilistic, e — dato che il numero di
-     * colori resta piccolo (10-12) — calcola anche la soluzione ESATTA per
-     * confronto tramite bruteForceOptimal().
+     * FUNZIONE UNICA per generare un'istanza completamente casuale del
+     * problema: grafo (spanning tree + archi extra fino a raggiungere la
+     * densita' richiesta, alcuni multi-colore secondo multiColorProb),
+     * costo di ciascun colore, e nodi sorgente/destinazione s,t — tutto
+     * scelto casualmente.
+     *
+     * Il seed usato internamente e' diverso ad ogni chiamata (basato su
+     * System.nanoTime()), quindi due chiamate consecutive con GLI STESSI
+     * parametri producono comunque istanze diverse. Per riprodurre
+     * esattamente un'istanza gia' generata (es. per debug), usare
+     * l'overload che accetta un seed esplicito.
+     *
+     * @param numNodes       numero di nodi del grafo (deve essere almeno 2)
+     * @param numColors      numero di colori disponibili
+     * @param density        densita' degli archi: Density.LOW (0.3), Density.MEDIUM (0.5) o Density.HIGH (0.8)
+     * @param multiColorProb probabilita' (0-1) che un arco extra abbia due colori invece di uno
+     * @return un MCCPSolver gia' pronto all'uso, con grafo, costi e nodi s/t casuali
      */
-    private static void runLargeRandomExample(String title, int numNodes, int numColors,
-                                              int numExtraEdges, double multiColorProb,
-                                              int sourceNode, int targetNode, long seed) {
+    public static MCCPSolver generateRandomInstance(int numNodes, int numColors,
+                                                    Density density, double multiColorProb) {
+        return generateRandomInstance(numNodes, numColors, density, multiColorProb, System.nanoTime());
+    }
+
+    /** Come generateRandomInstance(...), ma con un seed esplicito per la riproducibilita'. */
+    public static MCCPSolver generateRandomInstance(int numNodes, int numColors, Density density,
+                                                    double multiColorProb, long seed) {
+        if (numNodes < 2) {
+            throw new IllegalArgumentException("numNodes deve essere almeno 2 per avere s e t distinti");
+        }
+
         Random rnd = new Random(seed);
 
-        List<Edge> edges = generateRandomGraph(numNodes, numColors, numExtraEdges, multiColorProb, rnd);
+        List<Edge> edges = generateRandomGraph(numNodes, numColors, density.value, multiColorProb, rnd);
 
         double[] colorCost = new double[numColors];
         for (int c = 0; c < numColors; c++) {
-            colorCost[c] = 1 + rnd.nextInt(20); // costo intero fra 1 e 20
+            colorCost[c] = 1 + rnd.nextInt(50); // costo intero fra 1 e 50
         }
 
-        MCCPSolver solver = new MCCPSolver(numNodes, edges, numColors, colorCost, sourceNode, targetNode);
+        int sourceNode = rnd.nextInt(numNodes);
+        int targetNode;
+        do {
+            targetNode = rnd.nextInt(numNodes);
+        } while (targetNode == sourceNode);
 
-        long t0 = System.currentTimeMillis();
-        MCCPResult resultGreedy = solver.solve(1000);
-        long t1 = System.currentTimeMillis();
-        MCCPResult resultProbabilistic = solver.solveProbabilistic(1000);
-        long t2 = System.currentTimeMillis();
-        MCCPResult resultExact = solver.bruteForceOptimal();
-        long t3 = System.currentTimeMillis();
+        System.out.println("(istanza generata con seed=" + seed + ", densita'=" + density
+                + " (" + density.value + "), per riprodurla esattamente passare questo seed "
+                + "a generateRandomInstance(..., seed))");
 
-        System.out.println("[" + title + "] " + numNodes + " nodi, " + edges.size() + " archi, "
-                + numColors + " colori, s=" + sourceNode + ", t=" + targetNode);
-        System.out.println("Costi dei colori: " + Arrays.toString(colorCost));
-        System.out.println("VNS-Greedy        -> " + resultGreedy + "  [" + (t1 - t0) + " ms]");
-        System.out.println("VNS-Probabilistic -> " + resultProbabilistic + "  [" + (t2 - t1) + " ms]");
-        System.out.println("Ottimo esatto     -> " + resultExact + "  [" + (t3 - t2) + " ms, forza bruta]");
+        return new MCCPSolver(numNodes, edges, numColors, colorCost, sourceNode, targetNode);
+    }
+
+    /**
+     * FUNZIONE UNICA per eseguire tutti gli algoritmi disponibili
+     * (VNS-Greedy, VNS-Probabilistic e, se il numero di colori lo consente,
+     * la soluzione ESATTA per forza bruta) su un'istanza gia' costruita,
+     * stampando risultati, tempi di esecuzione e l'esito della verifica
+     * indipendente (verifyCutWithBFS) per ciascun risultato.
+     *
+     * @param title                 etichetta descrittiva stampata in testa all'output
+     * @param solver                l'istanza del problema da risolvere
+     * @param maxRunningTimeMillis  tempo massimo (in ms) concesso a solve() e a solveProbabilistic()
+     */
+    public static void runAllAlgorithms(String title, MCCPSolver solver, long maxRunningTimeMillis) {
+        System.out.println("[" + title + "] " + solver.getNumNodes() + " nodi, " + solver.getNumEdges()
+                + " archi, " + solver.getNumColors() + " colori, s=" + solver.getSourceNode()
+                + ", t=" + solver.getTargetNode());
+        System.out.println("Costi dei colori: " + Arrays.toString(solver.getColorCost()));
+        System.out.println();
+
+        MCCPResult resultGreedy = solver.solve(maxRunningTimeMillis);
+        System.out.println("VNS-Greedy        -> " + resultGreedy);
+        solver.verifyCutWithBFS(resultGreedy.cutColors, true);
+
+        MCCPResult resultProbabilistic = solver.solveProbabilistic(maxRunningTimeMillis);
+        System.out.println("VNS-Probabilistic -> " + resultProbabilistic);
+        solver.verifyCutWithBFS(resultProbabilistic.cutColors, true);
+
+        // la forza bruta ha costo 2^numColors: fattibile solo con pochi colori
+        if (solver.getNumColors() <= 24) {
+            MCCPResult resultExact = solver.bruteForceOptimal();
+            System.out.println("Ottimo esatto     -> " + resultExact + "  [forza bruta]");
+            solver.verifyCutWithBFS(resultExact.cutColors, true);
+        } else {
+            System.out.println("(Con " + solver.getNumColors() + " colori la forza bruta (2^"
+                    + solver.getNumColors() + " sottoinsiemi) non e' fattibile: "
+                    + "correttezza controllata solo con verifyCutWithBFS.)");
+        }
     }
 }
