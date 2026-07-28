@@ -528,42 +528,6 @@ public class MCCPSolver {
         return buildResult(bestS, timeToBestMs, totalTimeMs);
     }
 
-    // ---------- Validatore esatto (solo per un numero contenuto di colori) ----------
-
-    /**
-     * Calcola la soluzione ESATTA per enumerazione di tutti i 2^numColors
-     * sottoinsiemi di colori. Utile per validare il risultato della VNS su
-     * istanze di test con pochi colori (indicativamente numColors <= 22-24).
-     * Non pensato per l'uso in produzione su istanze reali (crescita esponenziale).
-     */
-    public MCCPResult bruteForceOptimal() {
-        if (numColors > 24) {
-            throw new IllegalStateException(
-                    "bruteForceOptimal e' pensato solo per istanze di test con pochi colori (<= 24)");
-        }
-        long startTime = System.currentTimeMillis();
-        Set<Integer> bestKept = new HashSet<>();
-        double bestWeight = -1.0;
-        long timeToBestMs = 0;
-        int totalMasks = 1 << numColors;
-        for (int mask = 0; mask < totalMasks; mask++) {
-            Set<Integer> candidate = new HashSet<>();
-            for (int c = 0; c < numColors; c++) {
-                if ((mask & (1 << c)) != 0) candidate.add(c);
-            }
-            if (isFeasible(candidate)) {
-                double w = weight(candidate);
-                if (w > bestWeight) {
-                    bestWeight = w;
-                    bestKept = candidate;
-                    timeToBestMs = System.currentTimeMillis() - startTime;
-                }
-            }
-        }
-        long totalTimeMs = System.currentTimeMillis() - startTime;
-        return buildResult(bestKept, timeToBestMs, totalTimeMs);
-    }
-
     // ---------- Verificatore indipendente della soluzione (rimozione archi + BFS) ----------
 
     /**
@@ -659,7 +623,7 @@ public class MCCPSolver {
         for(int i = 0; i<10 ;i++){
             System.out.println("######################################################################################################################");
             System.out.println("Numero iterazione:"+ i);
-            MCCPSolver grande = generateRandomInstance(500, 125, Density.HIGH, 0.10);
+            MCCPSolver grande = generateRandomInstance(500, 125, Density.LOW, 0.10);
             runAllAlgorithms("Istanza casuale grande (densita' alta)", grande, 200000);
             System.out.println();
         }
@@ -673,7 +637,7 @@ public class MCCPSolver {
      * LOW = 0.3, MEDIUM = 0.5, HIGH = 0.8.
      */
     public enum Density {
-        LOW(0.3), MEDIUM(0.5), HIGH(0.8);
+        LOW(0.2), MEDIUM(0.5), HIGH(0.8);
 
         public final double value;
 
