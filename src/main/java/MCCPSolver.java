@@ -128,6 +128,8 @@ public class MCCPSolver {
     public double[] getColorCost() { return colorCost.clone(); }
     public int getSourceNode() { return s; }
     public int getTargetNode() { return t; }
+    /** Copia della lista di archi, utile per costruire altri solver (es. esatti) sulla stessa istanza. */
+    public List<Edge> getEdges() { return new ArrayList<>(edges); }
 
     // ---------- Union-Find (disjoint-set) con path compression e union by rank ----------
 
@@ -422,7 +424,7 @@ public class MCCPSolver {
         return new MCCPResult(cutColors, bestS, cutCost, timeToBestMs, totalTimeMs);
     }
 
-    // ---------- Algoritmo 1: General algorithm ----------
+// ---------- Algoritmo 1: General algorithm ----------
 
     public MCCPResult solve(long maxRunningTimeMillis) {
         Random rnd = new Random();
@@ -430,7 +432,7 @@ public class MCCPSolver {
 
         Set<Integer> bestS = generateInitialSolutionGreedy();
         int maxNeighborhood = numColors - bestS.size();
-        long timeToBestMs = System.currentTimeMillis() - startTime; // prima soluzione trovata
+        long timeToBestMs = System.currentTimeMillis() - startTime; // Prima soluzione trovata
 
         do {
             Set<Integer> s = newSolutionGreedy(bestS);
@@ -457,6 +459,13 @@ public class MCCPSolver {
                 if (weight(sPrime) > weight(s)) {
                     s = sPrime;
                     k = 1;
+
+                    // CORREZIONE: Aggiornamento IMMEDIATO di bestS e del timestamp!
+                    if (weight(s) > weight(bestS)) {
+                        bestS = new HashSet<>(s);
+                        maxNeighborhood = numColors - bestS.size();
+                        timeToBestMs = System.currentTimeMillis() - startTime;
+                    }
                 } else {
                     k++;
                 }
@@ -509,6 +518,13 @@ public class MCCPSolver {
                 if (weight(sPrime) > weight(s)) {
                     s = sPrime;
                     k = 1;
+
+                    // CORREZIONE: Aggiornamento IMMEDIATO di bestS e del timestamp!
+                    if (weight(s) > weight(bestS)) {
+                        bestS = new HashSet<>(s);
+                        maxNeighborhood = numColors - bestS.size();
+                        timeToBestMs = System.currentTimeMillis() - startTime;
+                    }
                 } else {
                     k++;
                 }
@@ -634,7 +650,7 @@ public class MCCPSolver {
      * Livello di densita' degli archi del grafo generato casualmente, sul
      * modello del parametro d usato nel paper (Sezione 3): il numero atteso
      * di archi e' d * |V| * (|V|-1) / 2. Qui i tre livelli usano i valori
-     * LOW = 0.3, MEDIUM = 0.5, HIGH = 0.8.
+     * LOW = 0.2, MEDIUM = 0.5, HIGH = 0.8.
      */
     public enum Density {
         LOW(0.2), MEDIUM(0.5), HIGH(0.8);
@@ -704,7 +720,7 @@ public class MCCPSolver {
      *
      * @param numNodes       numero di nodi del grafo (deve essere almeno 2)
      * @param numColors      numero di colori disponibili
-     * @param density        densita' degli archi: Density.LOW (0.3), Density.MEDIUM (0.5) o Density.HIGH (0.8)
+     * @param density        densita' degli archi: Density.LOW (0.2), Density.MEDIUM (0.5) o Density.HIGH (0.8)
      * @param multiColorProb probabilita' (0-1) che un arco extra abbia due colori invece di uno
      * @return un MCCPSolver gia' pronto all'uso, con grafo, costi e nodi s/t casuali
      */
@@ -744,8 +760,7 @@ public class MCCPSolver {
 
     /**
      * FUNZIONE UNICA per eseguire tutti gli algoritmi disponibili
-     * (VNS-Greedy, VNS-Probabilistic e, se il numero di colori lo consente,
-     * la soluzione ESATTA per forza bruta) su un'istanza gia' costruita,
+     * (VNS-Greedy, VNS-Probabilistic) su un'istanza gia' costruita,
      * stampando risultati, tempi di esecuzione e l'esito della verifica
      * indipendente (verifyCutWithBFS) per ciascun risultato.
      *
