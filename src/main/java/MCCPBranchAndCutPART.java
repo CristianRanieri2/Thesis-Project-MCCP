@@ -72,16 +72,16 @@ public class MCCPBranchAndCutPART {
             solver.setTimeLimit(maxRunningTimeMillis);
         }
 
-        // 1. Variabili Colore: z_c in {0, 1}
-        MPVariable[] z = new MPVariable[numColors];
-        for (int c = 0; c < numColors; c++) {
-            z[c] = solver.makeBoolVar("z_" + c);
-        }
-
-        // 2. Variabili Partizione Nodi: w_v in [0, 1]
+        // w binaria (0/1): il nodo v sta dal lato di s (1) o dal lato di t (0)
         MPVariable[] w = new MPVariable[numNodes];
         for (int v = 0; v < numNodes; v++) {
-            w[v] = solver.makeNumVar(0.0, 1.0, "w_" + v);
+            w[v] = solver.makeBoolVar("w_" + v);
+        }
+
+        // z continua, solo z_i >= 0 (nessun upper bound esplicito necessario)
+        MPVariable[] z = new MPVariable[numColors];
+        for (int c = 0; c < numColors; c++) {
+            z[c] = solver.makeNumVar(0.0, Double.POSITIVE_INFINITY, "z_" + c);
         }
 
         // 3. Vincoli di Confine per i nodi sorgente (s) e pozzo (t)

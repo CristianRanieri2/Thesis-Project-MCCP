@@ -8,9 +8,10 @@ public class MCCPTestRunner {
 
     // Seleziona l'algoritmo da testare singolarmente:
     public enum SolverType {
-        BASE,   // Branch & Cut Base (Pure Java)
-        PART,   // Modello PART_{s-t} con Google OR-Tools
-        VNS     // Metaeuristica VNS-Greedy nativa di MCCPSolver
+        BASE,        // Branch & Cut Base (Pure Java)
+        PART,        // Modello PART_{s-t} con Google OR-Tools
+        PART_WARM,   // Modello PART_{s-t} con Google OR-Tools + warm start da VNS-Probabilistic
+        VNS          // Metaeuristica VNS-Greedy nativa di MCCPSolver
     }
 
     public static void main(String[] args) {
@@ -20,11 +21,11 @@ public class MCCPTestRunner {
         // ========================================================================
 
         // MODIFICA QUI per scegliere quale solutore eseguire:
-        SolverType selectedSolver = SolverType.VNS;
+        SolverType selectedSolver = SolverType.PART_WARM;
 
-        int numNodes = 500;
-        int numColors = 250;
-        long timeoutMs = 200000;   // Timeout in ms (5 secondi per VNS, o più per B&C)
+        int numNodes = 1000;
+        int numColors = 500;
+        long timeoutMs = 500000000;   // Timeout in ms (5 secondi per VNS, o più per B&C)
         long seed = 12345L;      // Seed per la perfetta riproducibilità del grafo
 
         System.out.println("====== ESECUZIONE ISOLATA ALGORITMO: " + selectedSolver + " ======");
@@ -58,6 +59,10 @@ public class MCCPTestRunner {
 
             case PART:
                 runPartSolver(instance, timeoutMs);
+                break;
+
+            case PART_WARM:
+                runPartWarmStartSolver(instance, timeoutMs);
                 break;
 
             case VNS:
@@ -101,11 +106,45 @@ public class MCCPTestRunner {
                 instance.getTargetNode()
         );
 
+        // Nessun limite di tempo: passando 0, MCCPBranchAndCutPART.solveExact
+        // non chiama solver.setTimeLimit(...) (vedi il controllo "if (maxRunningTimeMillis > 0)"
+        // al suo interno), quindi OR-Tools gira finche' non dimostra l'ottimo,
+        // senza fermarsi per timeout. timeoutMs (parametro del test runner)
+        // viene volutamente ignorato qui.
         long startTime = System.currentTimeMillis();
-        MCCPSolver.MCCPResult result = part.solveExact(timeoutMs);
+        MCCPSolver.MCCPResult result = part.solveExact(0);
         long totalTime = System.currentTimeMillis() - startTime;
 
         printReport("B&C-PART (OR-Tools)", result, part.getNodesExplored(), part.isProvenOptimal(), totalTime, instance);
+    }
+
+    private static void runPartWarmStartSolver(MCCPSolver instance, long timeoutMs) {
+        System.out.println("Avvio Branch & Cut PART (Google OR-Tools) con warm start da VNS-Probabilistic...");
+
+        MCCPBranchAndCutPARTWarmStart partWarm = new MCCPBranchAndCutPARTWarmStart(
+                instance.getNumNodes(),
+                instance.getEdges(),
+                instance.getNumColors(),
+                instance.getColorCost(),
+                instance.getSourceNode(),
+                instance.getTargetNode()
+        );
+
+        // Nota: il tempo del warm start (VNS-Probabilistic) e' determinato
+        // internamente in base al numero di nodi (Tabella 1 del paper) e resta
+        // invariato. La parte OR-Tools, invece, viene lanciata SENZA limite di
+        // tempo (0 = nessun setTimeLimit, vedi MCCPBranchAndCutPARTWarmStart):
+        // gira finche' non dimostra l'ottimo. timeoutMs viene qui ignorato.
+        long startTime = System.currentTimeMillis();
+        MCCPSolver.MCCPResult result = partWarm.solveExactWithVNSWarmStart(instance, 0);
+        long totalTime = System.currentTimeMillis() - startTime;
+
+        System.out.println("------------------------------------------------------------");
+        System.out.println("Costo Warm Start (VNS):     " + partWarm.getVnsWarmStartCost()
+                + "  [" + partWarm.getVnsWarmStartTimeMillisUsed() + " ms]");
+
+        printReport("B&C-PART + Warm Start VNS", result, partWarm.getNodesExplored(),
+                partWarm.isProvenOptimal(), totalTime, instance);
     }
 
     private static void runVnsSolver(MCCPSolver instance, long timeoutMs) {
