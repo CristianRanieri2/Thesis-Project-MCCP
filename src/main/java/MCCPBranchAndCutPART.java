@@ -60,9 +60,9 @@ public class MCCPBranchAndCutPART {
         long searchStartMillis = System.currentTimeMillis();
 
         // Istanzia il solutore MILP CBC (Coin-or OR Branch and Cut)
-        MPSolver solver = MPSolver.createSolver("CBC");
+        MPSolver solver = MPSolver.createSolver("SCIP");
         if (solver == null) {
-            solver = MPSolver.createSolver("SCIP");
+            solver = MPSolver.createSolver("CBC");
         }
         if (solver == null) {
             throw new RuntimeException("Impossibile caricare i solutori MILP di OR-Tools (CBC/SCIP).");
@@ -72,6 +72,22 @@ public class MCCPBranchAndCutPART {
             solver.setTimeLimit(maxRunningTimeMillis);
         }
 
+        /*
+        //VERSIONE VELOCE
+        // 1. Variabili Colore: z_c in {0, 1}
+        MPVariable[] z = new MPVariable[numColors];
+        for (int c = 0; c < numColors; c++) {
+            z[c] = solver.makeBoolVar("z_" + c);
+        }
+
+        // 2. Variabili Partizione Nodi: w_v in [0, 1]
+        MPVariable[] w = new MPVariable[numNodes];
+        for (int v = 0; v < numNodes; v++) {
+            w[v] = solver.makeNumVar(0.0, 1.0, "w_" + v);
+        }
+        */
+
+        //VERSIONE LENTA
         // w binaria (0/1): il nodo v sta dal lato di s (1) o dal lato di t (0)
         MPVariable[] w = new MPVariable[numNodes];
         for (int v = 0; v < numNodes; v++) {

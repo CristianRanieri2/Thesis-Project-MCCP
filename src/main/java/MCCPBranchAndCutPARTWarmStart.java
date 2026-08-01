@@ -107,6 +107,9 @@ public class MCCPBranchAndCutPARTWarmStart {
         if (numNodes <= 200) return 30_000L;
         if (numNodes <= 400) return 80_000L;
         if (numNodes <= 500) return 200_000L;
+        if (numNodes <= 600) return 400_000L;
+        if (numNodes <= 700) return 800_000L;
+        if (numNodes <= 800) return 1600_000L;
         if (numNodes <= 1000) return 2_800_000L;
         return 3_600_000L;
     }
@@ -167,6 +170,42 @@ public class MCCPBranchAndCutPARTWarmStart {
         return solveExactInternal(maxRunningTimeMillisForBC, vnsResult.cutColors);
     }
 
+    /**
+     * Come {@link #solveExactWithVNSWarmStart(MCCPSolver, long, long)}, ma il
+     * warm start viene calcolato con {@link MCCPSolver2#solveProbabilistic(long, int)},
+     * cioe' con il doppio criterio di terminazione (tempo E stagnazione)
+     * invece del solo criterio temporale di {@link MCCPSolver#solveProbabilistic(long)}.
+     *
+     * @param instance2                  istanza MCCPSolver2 che rappresenta
+     *                                    LO STESSO grafo/costi/s/t con cui e'
+     *                                    stato costruito questo solver
+     * @param vnsMaxTimeMillis            tempo massimo (ms) concesso al warm start
+     * @param vnsMaxStagnantIterations    numero massimo di iterazioni consecutive
+     *                                    senza miglioramento prima che il warm
+     *                                    start si fermi (deve essere > 0)
+     * @param maxRunningTimeMillisForBC   tempo massimo (ms) concesso a OR-Tools
+     *                                    DOPO il warm start
+     */
+    public MCCPSolver.MCCPResult solveExactWithVNSWarmStart(MCCPSolver2 instance2, long vnsMaxTimeMillis,
+                                                            int vnsMaxStagnantIterations,
+                                                            long maxRunningTimeMillisForBC) {
+        System.out.println("[Warm start] VNS-Probabilistic (MCCPSolver2): budget tempo = " + vnsMaxTimeMillis
+                + " ms, stagnazione max = " + vnsMaxStagnantIterations + " iterazioni consecutive");
+        long tVnsStart = System.currentTimeMillis();
+        MCCPSolver.MCCPResult vnsResult = instance2.solveProbabilistic(vnsMaxTimeMillis, vnsMaxStagnantIterations);
+        long tVnsEnd = System.currentTimeMillis();
+
+        this.vnsWarmStartCost = (long) vnsResult.cutCost;
+        this.vnsWarmStartTimeMillisUsed = tVnsEnd - tVnsStart;
+
+        System.out.println("[Warm start] VNS-Probabilistic (MCCPSolver2) -> costo = " + vnsResult.cutCost
+                + "  [" + vnsWarmStartTimeMillisUsed + " ms effettivi, "
+                + instance2.getLastRunTotalIterations() + " iterazioni, fermato per stagnazione="
+                + instance2.isLastRunStoppedByStagnation() + "]");
+
+        return solveExactInternal(maxRunningTimeMillisForBC, vnsResult.cutColors);
+    }
+
     // ========================================================================
     // Costruzione del modello PART_{s-t} e risoluzione con hint
     // ========================================================================
@@ -177,15 +216,20 @@ public class MCCPBranchAndCutPARTWarmStart {
         MPSolver solver = MPSolver.createSolver("CBC");
         if (solver == null) {
             solver = MPSolver.createSolver("SCIP");
+            System.out.println("Solver:" + solver);
         }
         if (solver == null) {
             throw new RuntimeException("Impossibile caricare i solutori MILP di OR-Tools (CBC/SCIP).");
         }
 
+        //solver.enableOutput(); // Stampa a schermo i log nativi C++ di CBC/SCIP
+
         if (maxRunningTimeMillis > 0) {
             solver.setTimeLimit(maxRunningTimeMillis);
         }
 
+
+        //VERSIONE VELOCE
         // 1. Variabili Colore: z_c in {0, 1}
         MPVariable[] z = new MPVariable[numColors];
         for (int c = 0; c < numColors; c++) {
@@ -197,6 +241,21 @@ public class MCCPBranchAndCutPARTWarmStart {
         for (int v = 0; v < numNodes; v++) {
             w[v] = solver.makeNumVar(0.0, 1.0, "w_" + v);
         }
+
+/*
+        //VERSIONE LENTA
+        // w binaria (0/1): il nodo v sta dal lato di s (1) o dal lato di t (0)
+        MPVariable[] w = new MPVariable[numNodes];
+        for (int v = 0; v < numNodes; v++) {
+            w[v] = solver.makeBoolVar("w_" + v);
+        }
+
+        // z continua, solo z_i >= 0 (nessun upper bound esplicito necessario)
+        MPVariable[] z = new MPVariable[numColors];
+        for (int c = 0; c < numColors; c++) {
+            z[c] = solver.makeNumVar(0.0, Double.POSITIVE_INFINITY, "z_" + c);
+        }
+ */
 
         // 3. Vincoli di Confine per i nodi sorgente (s) e pozzo (t)
         MPConstraint sConstraint = solver.makeConstraint(1.0, 1.0, "w_s_bound");
@@ -328,9 +387,9 @@ public class MCCPBranchAndCutPARTWarmStart {
     public static void main(String[] args) {
         System.out.println("=== TEST: B&C-PART (base) vs B&C-PART con warm start VNS-Probabilistic ===");
 
-        for (int trial = 0; trial < 3; trial++) {
-            int numNodes = 200 + trial * 100;
-            int numColors = 100 + 50 * trial;
+        for (int trial = 0; trial < 5; trial++) {
+            int numNodes = 80 + trial * 10;
+            int numColors = 13 + 5 * trial;
 
             MCCPSolver instance = MCCPSolver.generateRandomInstance(numNodes, numColors, MCCPSolver.Density.MEDIUM, 0.10);
 

@@ -508,7 +508,7 @@ public class MCCPSolver2 {
         // (locale o globale) prima della scadenza, si fermera' prima grazie a
         // maxStagnantIterations, senza dover aspettare i 60s pieni.
         long maxTimeMillis = 60_000;
-        int maxStagnantIterations = 300;
+        int maxStagnantIterations = 100;
 
         MCCPSolver.MCCPResult result = solver.solveProbabilistic(maxTimeMillis, maxStagnantIterations);
 

@@ -10,10 +10,12 @@ public class MCCPTestRunner {
     public enum SolverType {
         BASE,        // Branch & Cut Base (Pure Java)
         PART,        // Modello PART_{s-t} con Google OR-Tools
-        PART_WARM,   // Modello PART_{s-t} con Google OR-Tools + warm start da VNS-Probabilistic
+        PART_WARM,   // Modello PART_{s-t} con Google OR-Tools + warm start da VNS-Probabilistic (MCCPSolver)
+        PART_WARM2,  // Modello PART_{s-t} con Google OR-Tools + warm start da VNS-Probabilistic (MCCPSolver2, doppio criterio di terminazione)
         VNS          // Metaeuristica VNS-Greedy nativa di MCCPSolver
     }
 
+/*
     public static void main(String[] args) {
 
         // ========================================================================
@@ -21,12 +23,16 @@ public class MCCPTestRunner {
         // ========================================================================
 
         // MODIFICA QUI per scegliere quale solutore eseguire:
-        SolverType selectedSolver = SolverType.PART_WARM;
+        SolverType selectedSolver = SolverType.PART;
 
-        int numNodes = 1000;
-        int numColors = 500;
-        long timeoutMs = 500000000;   // Timeout in ms (5 secondi per VNS, o più per B&C)
-        long seed = 12345L;      // Seed per la perfetta riproducibilità del grafo
+        int numNodes = 100;
+        int numColors = 25;
+        long timeoutMs = vnsWarmStartTimeMillisFromTable(numNodes);     // Timeout in ms (5 secondi per VNS, o più per B&C)
+        long seed = 29575L;                                             // Seed per la perfetta riproducibilità del grafo
+
+        // Usato solo da PART_WARM2: numero massimo di iterazioni consecutive
+        // senza miglioramento prima che il warm start (MCCPSolver2) si fermi.
+        int vnsMaxStagnantIterations = 100;
 
         System.out.println("====== ESECUZIONE ISOLATA ALGORITMO: " + selectedSolver + " ======");
         System.out.println("Nodi: " + numNodes + " | Colori: " + numColors + " | Seed: " + seed);
@@ -65,11 +71,109 @@ public class MCCPTestRunner {
                 runPartWarmStartSolver(instance, timeoutMs);
                 break;
 
+            case PART_WARM2:
+                runPartWarmStart2Solver(instance, timeoutMs, vnsMaxStagnantIterations);
+                break;
+
             case VNS:
                 runVnsSolver(instance, timeoutMs);
                 break;
         }
     }
+
+ */
+
+
+
+
+    public static void main(String[] args) {
+
+        // ========================================================================
+        // 1. CONFIGURAZIONE GENERALE DEL TEST
+        // ========================================================================
+
+        // Modifica qui per scegliere il solutore da testare
+        SolverType selectedSolver = SolverType.VNS;
+
+        int numNodes = 400;                                             // Numero di nodi del grafo |V|
+        long timeoutMs = vnsWarmStartTimeMillisFromTable(numNodes);     // Timeout globale in ms
+        long seed = 29575L;                                             // Seed per la riproducibilità
+        int vnsMaxStagnantIterations = 100;
+
+        // Fattori per i colori:
+        double[] colorRatios = { 0.25, 0.5 };
+
+        System.out.println("============================================================");
+        System.out.println("====== BATTERIA DI TEST SPERIMENTALI: " + selectedSolver + " ======");
+        System.out.println("Nodi base (|V|): " + numNodes + " | Seed: " + seed);
+        System.out.println("============================================================\n");
+
+        int testCounter = 1;
+
+        // ========================================================================
+        // 2. CICLI ANNIDATI SPERIMENTALI (8 TEST TOTALI)
+        // ========================================================================
+
+        // 1° FOR: Variazione del numero di colori in funzione del numero di nodi
+        for (double ratio : colorRatios) {
+
+            // Calcolo dinamico del numero di colori (arrotondato all'intero più vicino)
+            int numColors = (int) Math.round(numNodes * ratio);
+
+
+
+            System.out.println("------------------------------------------------------------");
+            System.out.printf("TEST #%d | Nodi: %d | Colori: %d (%.0f%% |V|) | Densità: %s%n",
+                    testCounter++, numNodes, numColors, ratio * 100, MCCPSolver.Density.MEDIUM);
+            System.out.println("------------------------------------------------------------");
+
+            // Generazione dell'istanza del grafo per la combinazione corrente
+            MCCPSolver instance = MCCPSolver.generateRandomInstance(
+                    numNodes,
+                    numColors,
+                    MCCPSolver.Density.HIGH,
+                    0.10,
+                    seed
+            );
+
+            System.out.println("Sorgente (s): " + instance.getSourceNode() + " | Pozzo (t): " + instance.getTargetNode());
+            System.out.println("Archi totali: " + instance.getNumEdges());
+            System.out.println("------------------------------------------------------------");
+
+            // Esecuzione del solutore selezionato
+            switch (selectedSolver) {
+                case BASE:
+                    runBaseSolver(instance, timeoutMs);
+                    break;
+
+                case PART:
+                    runPartSolver(instance, timeoutMs);
+                    break;
+
+                case PART_WARM:
+                    runPartWarmStartSolver(instance, timeoutMs);
+                    break;
+
+                case PART_WARM2:
+                    runPartWarmStart2Solver(instance, timeoutMs, vnsMaxStagnantIterations);
+                    break;
+
+                case VNS:
+                    runVnsSolver(instance, timeoutMs);
+                    break;
+            }
+
+            System.out.println("\n");
+        }
+
+        System.out.println("============================================================");
+        System.out.println("====== BATTERIA DI TEST COMPLETATA CON SUCCESSO ======");
+        System.out.println("============================================================");
+    }
+
+
+
+
 
     // ========================================================================
     // ESECUZIONE DEI SINGOLI SOLUTORI
@@ -145,6 +249,67 @@ public class MCCPTestRunner {
 
         printReport("B&C-PART + Warm Start VNS", result, partWarm.getNodesExplored(),
                 partWarm.isProvenOptimal(), totalTime, instance);
+    }
+
+    private static void runPartWarmStart2Solver(MCCPSolver instance, long timeoutMs, int vnsMaxStagnantIterations) {
+        System.out.println("Avvio Branch & Cut PART (Google OR-Tools) con warm start da MCCPSolver2 "
+                + "(VNS-Probabilistic con doppio criterio di terminazione: tempo + stagnazione)...");
+
+        // MCCPSolver2 sullo STESSO grafo/costi/s/t dell'istanza gia' generata,
+        // cosi' il confronto con gli altri solutori resta sulla stessa istanza.
+        MCCPSolver2 instance2 = new MCCPSolver2(
+                instance.getNumNodes(),
+                instance.getEdges(),
+                instance.getNumColors(),
+                instance.getColorCost(),
+                instance.getSourceNode(),
+                instance.getTargetNode()
+        );
+
+        // Stesso budget di tempo per il warm start della Tabella 1 del paper,
+        // usato anche da MCCPBranchAndCutPARTWarmStart.solveExactWithVNSWarmStart(MCCPSolver,...).
+        long vnsMaxTimeMillis = vnsWarmStartTimeMillisFromTable(instance.getNumNodes());
+
+        MCCPBranchAndCutPARTWarmStart partWarm2 = new MCCPBranchAndCutPARTWarmStart(
+                instance.getNumNodes(),
+                instance.getEdges(),
+                instance.getNumColors(),
+                instance.getColorCost(),
+                instance.getSourceNode(),
+                instance.getTargetNode()
+        );
+
+        // La fase OR-Tools gira senza limite di tempo (0), come per PART_WARM;
+        // timeoutMs viene qui ignorato.
+        long startTime = System.currentTimeMillis();
+        MCCPSolver.MCCPResult result = partWarm2.solveExactWithVNSWarmStart(
+                instance2, vnsMaxTimeMillis, vnsMaxStagnantIterations, 0);
+        long totalTime = System.currentTimeMillis() - startTime;
+
+        System.out.println("------------------------------------------------------------");
+        System.out.println("Costo Warm Start (VNS via MCCPSolver2): " + partWarm2.getVnsWarmStartCost()
+                + "  [" + partWarm2.getVnsWarmStartTimeMillisUsed() + " ms]");
+        System.out.println("Iterazioni totali (warm start):        " + instance2.getLastRunTotalIterations());
+        System.out.println("Warm start fermato per stagnazione?    " + instance2.isLastRunStoppedByStagnation()
+                + " (soglia=" + vnsMaxStagnantIterations
+                + ", raggiunte=" + instance2.getLastRunStagnantIterationsAtStop() + ")");
+
+        printReport("B&C-PART + Warm Start VNS (MCCPSolver2)", result, partWarm2.getNodesExplored(),
+                partWarm2.isProvenOptimal(), totalTime, instance);
+    }
+
+    /** Tabella 1 (Bordini & Protti, 2017): tempo massimo per VNS in funzione del numero di nodi. */
+    private static long vnsWarmStartTimeMillisFromTable(int numNodes) {
+        if (numNodes <= 50) return 1_000L;
+        if (numNodes <= 100) return 20_000L;
+        if (numNodes <= 200) return 30_000L;
+        if (numNodes <= 400) return 80_000L;
+        if (numNodes <= 500) return 200_000L;
+        if (numNodes <= 600) return 400_000L;
+        if (numNodes <= 700) return 800_000L;
+        if (numNodes <= 800) return 1600_000L;
+        if (numNodes <= 1000) return 2_800_000L;
+        return 3_600_000L;
     }
 
     private static void runVnsSolver(MCCPSolver instance, long timeoutMs) {
