@@ -5,6 +5,7 @@ import com.google.ortools.linearsolver.MPSolver;
 import com.google.ortools.linearsolver.MPVariable;
 
 import java.util.*;
+import java.util.concurrent.*;
 
 /**
  * Variante di {@link MCCPBranchAndCutPART} che usa come punto di partenza
@@ -31,6 +32,9 @@ import java.util.*;
  *   |V| <=  200  ->   30 s
  *   |V| <=  400  ->   80 s
  *   |V| <=  500  ->  200 s
+ *   |V| <=  600  ->  400 s
+ *   |V| <=  700  ->  800 s
+ *   |V| <=  800  -> 1600 s
  *   |V| <= 1000  -> 2800 s
  *   |V| >  1000  -> 3600 s
  *
@@ -48,6 +52,28 @@ import java.util.*;
  * colori: w_v = 1 se v e' ancora raggiungibile da s (coerente con w_s=1),
  * w_v = 0 altrimenti (coerente con w_t=0, dato che il taglio di VNS e', per
  * costruzione, sempre valido: t non e' mai raggiungibile da s).
+ *
+ * ============================================================================
+ * PARALLELIZZAZIONE
+ * ============================================================================
+ * Due livelli di parallelismo, indipendenti fra loro:
+ *
+ * 1) MULTITHREADING DEL SOLUTORE (fase esatta): in solveExactInternal, subito
+ *    dopo la creazione del solver, si chiama solver.setNumThreads(...) per
+ *    abilitare la ricerca B&B multi-thread nativa di CBC/SCIP. Se la tua
+ *    versione di OR-Tools non espone questo metodo, sostituiscilo con
+ *    solver.setSolverSpecificParametersAsString("parallel/maxnthreads = N")
+ *    (sintassi nativa di SCIP), lasciato commentato subito sotto come
+ *    alternativa pronta all'uso.
+ *
+ * 2) WARM START PARALLELO (fase euristica): {@link #solveExactWithVNSWarmStartParallel}
+ *    lancia N esecuzioni INDIPENDENTI e CONCORRENTI di VNS-Probabilistic
+ *    (una per thread) e tiene la migliore fra tutte, ottenendo un incumbent
+ *    iniziale di qualita' piu' alta nello stesso tempo di parete invece che
+ *    in un tempo N volte piu' lungo. E' sicuro perche' MCCPSolver non ha
+ *    stato mutabile condiviso fra le chiamate (i campi dell'istanza sono
+ *    impostati una sola volta nel costruttore; ogni chiamata a
+ *    solveProbabilistic crea il proprio Random locale).
  */
 public class MCCPBranchAndCutPARTWarmStart {
 
@@ -152,6 +178,64 @@ public class MCCPBranchAndCutPARTWarmStart {
         return solveExactInternal(maxRunningTimeMillisForBC, vnsResult.cutColors);
     }
 
+    /**
+     * Come {@link #solveExactWithVNSWarmStart(MCCPSolver, long)}, ma il warm
+     * start viene calcolato lanciando {@code numParallelVnsRuns} esecuzioni
+     * INDIPENDENTI e CONCORRENTI di VNS-Probabilistic (ciascuna con lo stesso
+     * budget di tempo della Tabella 1), tenendo il risultato migliore fra
+     * tutte. Essendo VNS-Probabilistic stocastico, esecuzioni indipendenti
+     * convergono tipicamente a soluzioni leggermente diverse: eseguirne
+     * diverse in parallelo (una per thread) permette di ottenere un
+     * incumbent iniziale migliore nello STESSO tempo di parete, invece che
+     * un tempo N volte piu' lungo come accadrebbe eseguendole in sequenza.
+     *
+     * @param numParallelVnsRuns numero di esecuzioni VNS-Probabilistic da
+     *                            lanciare in parallelo (tipicamente pari al
+     *                            numero di core disponibili)
+     */
+    public MCCPSolver.MCCPResult solveExactWithVNSWarmStartParallel(MCCPSolver instance, long maxRunningTimeMillisForBC,
+                                                                    int numParallelVnsRuns) {
+        if (numParallelVnsRuns <= 0) {
+            throw new IllegalArgumentException("numParallelVnsRuns deve essere positivo");
+        }
+
+        long vnsTimeMillis = vnsWarmStartTimeMillis(numNodes);
+        System.out.println("[Warm start parallelo] " + numParallelVnsRuns
+                + " esecuzioni concorrenti di VNS-Probabilistic, budget ciascuna = " + vnsTimeMillis
+                + " ms (|V|=" + numNodes + ")");
+
+        long tVnsStart = System.currentTimeMillis();
+        ExecutorService executor = Executors.newFixedThreadPool(numParallelVnsRuns);
+        List<Future<MCCPSolver.MCCPResult>> futures = new ArrayList<>();
+        try {
+            for (int i = 0; i < numParallelVnsRuns; i++) {
+                futures.add(executor.submit(() -> instance.solveProbabilistic(vnsTimeMillis)));
+            }
+
+            MCCPSolver.MCCPResult best = null;
+            for (Future<MCCPSolver.MCCPResult> f : futures) {
+                MCCPSolver.MCCPResult r = f.get();
+                if (best == null || r.cutCost < best.cutCost) {
+                    best = r;
+                }
+            }
+            long tVnsEnd = System.currentTimeMillis();
+
+            this.vnsWarmStartCost = (long) best.cutCost;
+            this.vnsWarmStartTimeMillisUsed = tVnsEnd - tVnsStart;
+
+            System.out.println("[Warm start parallelo] migliore fra " + numParallelVnsRuns
+                    + " run -> costo = " + best.cutCost + "  [" + vnsWarmStartTimeMillisUsed + " ms di parete]");
+
+            return solveExactInternal(maxRunningTimeMillisForBC, best.cutColors);
+        } catch (InterruptedException | ExecutionException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Errore durante il warm start parallelo", e);
+        } finally {
+            executor.shutdown();
+        }
+    }
+
     /** Come sopra, ma con un budget esplicito per il warm start invece di quello della Tabella 1. */
     public MCCPSolver.MCCPResult solveExactWithVNSWarmStart(MCCPSolver instance, long maxRunningTimeMillisForBC,
                                                             long vnsWarmStartTimeMillisOverride) {
@@ -207,6 +291,82 @@ public class MCCPBranchAndCutPARTWarmStart {
     }
 
     // ========================================================================
+    // ALGORITMO APPROSSIMATO: tempo totale suddiviso tra warm start e PART
+    // ========================================================================
+
+    /**
+     * Versione APPROSSIMATA del solutore: a differenza di
+     * {@link #solveExactWithVNSWarmStart(MCCPSolver, long)} — dove il tempo
+     * del warm start e' fisso (Tabella 1) e la fase PART gira SENZA limite
+     * fino a dimostrare l'ottimo — qui si parte da un unico budget di tempo
+     * TOTALE che viene suddiviso ESATTAMENTE A META':
+     *
+     *   - meta' del tempo per VNS-Probabilistic (warm start),
+     *   - meta' del tempo per la fase PART con OR-Tools, questa volta con un
+     *     LIMITE DI TEMPO effettivo (non piu' illimitato).
+     *
+     * Poiche' la fase PART ha ora un tempo finito, non e' garantito che
+     * arrivi a dimostrare l'ottimo: il risultato restituito puo' quindi
+     * essere solo un upper bound (una buona approssimazione), non l'ottimo
+     * certificato. Controlla sempre {@link #isProvenOptimal()} dopo la
+     * chiamata per sapere se, nonostante il tempo ridotto, l'ottimo e' stato
+     * comunque dimostrato (puo' succedere su istanze facili).
+     *
+     * @param instance         l'istanza del problema (stesso grafo/costi/s/t
+     *                          con cui e' stato costruito questo solver)
+     * @param totalTimeMillis  budget di tempo TOTALE (ms), suddiviso a meta'
+     *                          fra warm start e fase PART
+     */
+    public MCCPSolver.MCCPResult solveApproximate(MCCPSolver instance, long totalTimeMillis) {
+        return solveApproximate(instance, totalTimeMillis, 0.5);
+    }
+
+    /**
+     * Come {@link #solveApproximate(MCCPSolver, long)}, ma con una frazione
+     * di tempo per il warm start configurabile invece del 50% fisso.
+     *
+     * @param vnsTimeFraction frazione (0,1) di totalTimeMillis da concedere
+     *                        al warm start; il resto va alla fase PART
+     */
+    public MCCPSolver.MCCPResult solveApproximate(MCCPSolver instance, long totalTimeMillis, double vnsTimeFraction) {
+        if (totalTimeMillis <= 0) {
+            throw new IllegalArgumentException("totalTimeMillis deve essere positivo per l'algoritmo approssimato");
+        }
+        if (vnsTimeFraction <= 0.0 || vnsTimeFraction >= 1.0) {
+            throw new IllegalArgumentException("vnsTimeFraction deve essere strettamente compreso tra 0 e 1");
+        }
+
+        long vnsTimeMillis = Math.round(totalTimeMillis * vnsTimeFraction);
+        long partTimeMillis = totalTimeMillis - vnsTimeMillis;
+
+        System.out.println("[Approssimato] budget totale = " + totalTimeMillis + " ms, suddiviso: warm start = "
+                + vnsTimeMillis + " ms (" + Math.round(vnsTimeFraction * 100) + "%), PART = "
+                + partTimeMillis + " ms (" + Math.round((1 - vnsTimeFraction) * 100) + "%)");
+
+        long tVnsStart = System.currentTimeMillis();
+        MCCPSolver.MCCPResult vnsResult = instance.solveProbabilistic(vnsTimeMillis);
+        long tVnsEnd = System.currentTimeMillis();
+
+        this.vnsWarmStartCost = (long) vnsResult.cutCost;
+        this.vnsWarmStartTimeMillisUsed = tVnsEnd - tVnsStart;
+
+        System.out.println("[Approssimato] Warm start -> costo = " + vnsResult.cutCost
+                + "  [" + vnsWarmStartTimeMillisUsed + " ms effettivi]");
+
+        MCCPSolver.MCCPResult finalResult = solveExactInternal(partTimeMillis, vnsResult.cutColors);
+
+        if (provenOptimal) {
+            System.out.println("[Approssimato] La fase PART ha comunque dimostrato l'ottimo entro il tempo concesso.");
+        } else {
+            System.out.println("[Approssimato] ATTENZIONE: la fase PART NON ha dimostrato l'ottimo entro i "
+                    + partTimeMillis + " ms concessi -> il risultato restituito e' un'APPROSSIMAZIONE "
+                    + "(upper bound), non l'ottimo certificato.");
+        }
+
+        return finalResult;
+    }
+
+    // ========================================================================
     // Costruzione del modello PART_{s-t} e risoluzione con hint
     // ========================================================================
 
@@ -221,6 +381,16 @@ public class MCCPBranchAndCutPARTWarmStart {
         if (solver == null) {
             throw new RuntimeException("Impossibile caricare i solutori MILP di OR-Tools (CBC/SCIP).");
         }
+
+        // Abilita la ricerca B&B multi-thread nativa del solutore.
+        // Prova prima l'opzione A (se la tua versione di OR-Tools la espone
+        // direttamente); se NON COMPILA, commentala e usa l'opzione B.
+        int numThreads = Runtime.getRuntime().availableProcessors();
+        // --- Opzione A ---
+        solver.setNumThreads(numThreads);
+        // --- Opzione B (alternativa, se la A non compila) ---
+        // solver.setSolverSpecificParametersAsString("parallel/maxnthreads = " + numThreads);
+        System.out.println("[Solver] multithreading richiesto: " + numThreads + " thread");
 
         //solver.enableOutput(); // Stampa a schermo i log nativi C++ di CBC/SCIP
 
@@ -385,7 +555,7 @@ public class MCCPBranchAndCutPARTWarmStart {
     // ========================================================================
 
     public static void main(String[] args) {
-        System.out.println("=== TEST: B&C-PART (base) vs B&C-PART con warm start VNS-Probabilistic ===");
+        System.out.println("=== TEST: B&C-PART (base) vs B&C-PART con warm start VNS-Probabilistic (parallelo) ===");
 
         for (int trial = 0; trial < 5; trial++) {
             int numNodes = 80 + trial * 10;
@@ -403,14 +573,16 @@ public class MCCPBranchAndCutPARTWarmStart {
             MCCPSolver.MCCPResult baseResult = partBase.solveExact(0);
             long t1 = System.currentTimeMillis();
 
-            // B&C-PART con warm start VNS-Probabilistic. Il tempo del warm start
-            // resta quello della Tabella 1 (calcolato internamente in base a |V|);
-            // la fase OR-Tools successiva gira anch'essa senza limite di tempo.
+            // B&C-PART con warm start VNS-Probabilistic PARALLELO (N run concorrenti).
+            // Il tempo del warm start resta quello della Tabella 1 (calcolato
+            // internamente in base a |V|); la fase OR-Tools successiva gira
+            // anch'essa senza limite di tempo.
+            int numParallelVnsRuns = Runtime.getRuntime().availableProcessors();
             MCCPBranchAndCutPARTWarmStart partWarm = new MCCPBranchAndCutPARTWarmStart(
                     instance.getNumNodes(), instance.getEdges(), instance.getNumColors(),
                     instance.getColorCost(), instance.getSourceNode(), instance.getTargetNode());
             long t2 = System.currentTimeMillis();
-            MCCPSolver.MCCPResult warmResult = partWarm.solveExactWithVNSWarmStart(instance, 0);
+            MCCPSolver.MCCPResult warmResult = partWarm.solveExactWithVNSWarmStartParallel(instance, 0, numParallelVnsRuns);
             long t3 = System.currentTimeMillis();
 
             System.out.println("\n[Trial " + trial + "] " + numNodes + " nodi, " + numColors
@@ -422,7 +594,7 @@ public class MCCPBranchAndCutPARTWarmStart {
                     + " | tempo totale=" + (t1 - t0) + " ms");
             instance.verifyCutWithBFS(baseResult.cutColors, false);
 
-            System.out.println("B&C-PART (warm start VNS) -> costo=" + warmResult.cutCost
+            System.out.println("B&C-PART (warm start VNS parallelo, " + numParallelVnsRuns + " thread) -> costo=" + warmResult.cutCost
                     + " | warm start VNS costo=" + partWarm.getVnsWarmStartCost()
                     + " (" + partWarm.getVnsWarmStartTimeMillisUsed() + " ms)"
                     + " | nodi B&B=" + partWarm.getNodesExplored()
