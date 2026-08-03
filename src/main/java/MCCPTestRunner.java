@@ -115,7 +115,7 @@ public class MCCPTestRunner {
 
         int numNodes = 500;                                             // Numero di nodi del grafo |V|
         long timeoutMs = vnsWarmStartTimeMillisFromTable(numNodes);     // Timeout globale in ms
-        long seed = 167023L;                                             // Seed per la riproducibilità
+        long seed = 29575L;                                             // Seed per la riproducibilità
         int vnsMaxStagnantIterations = 100;
 
         // Usato solo da PART_WARM_PARALLEL: numero di esecuzioni concorrenti
@@ -127,7 +127,7 @@ public class MCCPTestRunner {
         long approxTotalTimeMillis = timeoutMs;
 
         // Fattori per i colori:
-        double[] colorRatios = {0.5, 1, 1.25 };
+        double[] colorRatios = { 0.5, 1, 1.25 };
 
         System.out.println("============================================================");
         System.out.println("====== BATTERIA DI TEST SPERIMENTALI: " + selectedSolver + " ======");
@@ -157,8 +157,8 @@ public class MCCPTestRunner {
             MCCPSolver instance = MCCPSolver.generateRandomInstance(
                     numNodes,
                     numColors,
-                    MCCPSolver.Density.LOW,
-                    0.35,
+                    MCCPSolver.Density.MEDIUM,
+                    0.2,
                     seed
             );
 

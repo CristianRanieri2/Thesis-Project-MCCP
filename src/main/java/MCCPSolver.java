@@ -424,7 +424,7 @@ public class MCCPSolver {
         return new MCCPResult(cutColors, bestS, cutCost, timeToBestMs, totalTimeMs);
     }
 
-// ---------- Algoritmo 1: General algorithm ----------
+    // ---------- Algoritmo 1: General algorithm ----------
 
     public MCCPResult solve(long maxRunningTimeMillis) {
         Random rnd = new Random();
@@ -432,7 +432,7 @@ public class MCCPSolver {
 
         Set<Integer> bestS = generateInitialSolutionGreedy();
         int maxNeighborhood = numColors - bestS.size();
-        long timeToBestMs = System.currentTimeMillis() - startTime; // Prima soluzione trovata
+        long timeToBestMs = System.currentTimeMillis() - startTime; // prima soluzione trovata
 
         do {
             Set<Integer> s = newSolutionGreedy(bestS);
@@ -459,13 +459,6 @@ public class MCCPSolver {
                 if (weight(sPrime) > weight(s)) {
                     s = sPrime;
                     k = 1;
-
-                    // CORREZIONE: Aggiornamento IMMEDIATO di bestS e del timestamp!
-                    if (weight(s) > weight(bestS)) {
-                        bestS = new HashSet<>(s);
-                        maxNeighborhood = numColors - bestS.size();
-                        timeToBestMs = System.currentTimeMillis() - startTime;
-                    }
                 } else {
                     k++;
                 }
@@ -518,13 +511,6 @@ public class MCCPSolver {
                 if (weight(sPrime) > weight(s)) {
                     s = sPrime;
                     k = 1;
-
-                    // CORREZIONE: Aggiornamento IMMEDIATO di bestS e del timestamp!
-                    if (weight(s) > weight(bestS)) {
-                        bestS = new HashSet<>(s);
-                        maxNeighborhood = numColors - bestS.size();
-                        timeToBestMs = System.currentTimeMillis() - startTime;
-                    }
                 } else {
                     k++;
                 }
