@@ -13,36 +13,40 @@ public class MCCPTestRunner {
         PART_WARM_PARALLEL, // Come PART_WARM, ma con N esecuzioni di VNS-Probabilistic in parallelo
         PART_WARM2,         // Modello PART_{s-t} + warm start da MCCPSolver2
         PART_APPROX,        // Versione APPROSSIMATA con controlli temporali capillari
+        PART_BEAM_SEARCH,   // Euristica Beam Search con limite di tempo
         VNS,                // Metaeuristica VNS-Greedy nativa
         VNS_PROBABILISTIC   // Metaeuristica VNS-Probabilistica nativa
     }
 
     public static void main(String[] args) {
 
-        // Seleziona qui il solutore da testare (es. SolverType.VNS_PROBABILISTIC)
-        SolverType selectedSolver = SolverType.VNS_PROBABILISTIC;
+        SolverType selectedSolver = SolverType.VNS;
 
         int numNodes = 700;
-        long timeoutMs = vnsWarmStartTimeMillisFromTable(numNodes);
-        long seed = 29575L;
+        long timeoutMs = vnsWarmStartTimeMillisFromTable(numNodes)/2;
+        long seed = 238765492834L;
         int vnsMaxStagnantIterations = 100;
 
         int numParallelVnsRuns = Runtime.getRuntime().availableProcessors();
         long approxTotalTimeMillis = timeoutMs;
+        int beamWidth = 20;
 
-        double[] colorRatios = { 1 };
+        double[] colorRatios = { 0.25, 0.5, 1 };
         MCCPSolver.Density[] densitys = {MCCPSolver.Density.LOW, MCCPSolver.Density.MEDIUM, MCCPSolver.Density.HIGH};
 
         System.out.println("============================================================");
         System.out.println("====== BATTERIA DI TEST SPERIMENTALI: " + selectedSolver + " ======");
         System.out.println("Nodi base (|V|): " + numNodes + " | Seed: " + seed);
+        if (selectedSolver == SolverType.PART_BEAM_SEARCH) {
+            System.out.println("Beam Width (k): " + beamWidth + " | Timeout VNS: " + timeoutMs + " ms | Timeout BeamSearch: " + timeoutMs + " ms");
+        }
         System.out.println("============================================================\n");
 
         int testCounter = 1;
 
-        for (double ratio : colorRatios) {
+        for(MCCPSolver.Density density : densitys){
 
-            for(MCCPSolver.Density density : densitys){
+            for (double ratio : colorRatios) {
 
                 int numColors = (int) Math.round(numNodes * ratio);
 
@@ -88,6 +92,10 @@ public class MCCPTestRunner {
                         runPartApproxSolver(instance, approxTotalTimeMillis);
                         break;
 
+                    case PART_BEAM_SEARCH:
+                        runPartBeamSearchSolver(instance, timeoutMs, timeoutMs, beamWidth);
+                        break;
+
                     case VNS:
                         runVnsSolver(instance, timeoutMs);
                         break;
@@ -105,10 +113,6 @@ public class MCCPTestRunner {
         System.out.println("====== BATTERIA DI TEST COMPLETATA CON SUCCESSO ======");
         System.out.println("============================================================");
     }
-
-    // ========================================================================
-    // ESECUZIONE DEI SINGOLI SOLUTORI
-    // ========================================================================
 
     private static void runBaseSolver(MCCPSolver instance, long timeoutMs) {
         System.out.println("Avvio Branch & Cut BASE...");
@@ -259,6 +263,33 @@ public class MCCPTestRunner {
                 partWarm2.isProvenOptimal(), totalTime, instance);
     }
 
+    private static void runPartBeamSearchSolver(MCCPSolver instance, long vnsWarmStartTimeMs, long beamSearchTimeoutMs, int beamWidth) {
+        System.out.println("Avvio Beam Search PART_{s-t} (k = " + beamWidth
+                + ") con Warm Start VNS (" + vnsWarmStartTimeMs + " ms) e Timeout Beam Search (" + beamSearchTimeoutMs + " ms)...");
+
+        MCCPPARTBeamSearch beamSearch = new MCCPPARTBeamSearch(
+                instance.getNumNodes(),
+                instance.getEdges(),
+                instance.getNumColors(),
+                instance.getColorCost(),
+                instance.getSourceNode(),
+                instance.getTargetNode()
+        );
+
+        long startTime = System.currentTimeMillis();
+        MCCPSolver.MCCPResult result = beamSearch.solveBeamSearch(instance, vnsWarmStartTimeMs, beamSearchTimeoutMs, beamWidth);
+        long totalTime = System.currentTimeMillis() - startTime;
+
+        System.out.println("------------------------------------------------------------");
+        System.out.println("Costo Warm Start (VNS):     " + beamSearch.getVnsWarmStartCost()
+                + "  [" + beamSearch.getVnsWarmStartTimeMillisUsed() + " ms]");
+        System.out.println("Livelli Esplorati:         " + beamSearch.getLevelsExplored());
+        System.out.println("Stati Totali Valutati:     " + beamSearch.getStatesEvaluated());
+
+        printReport("PART Beam Search (k=" + beamWidth + ")", result, beamSearch.getStatesEvaluated(),
+                false, totalTime, instance);
+    }
+
     private static long vnsWarmStartTimeMillisFromTable(int numNodes) {
         if (numNodes <= 50) return 1_000L;
         if (numNodes <= 100) return 20_000L;
@@ -303,8 +334,8 @@ public class MCCPTestRunner {
         System.out.println("------------------------------------------------------------");
 
         if (nodes >= 0) {
-            System.out.println("Nodi B&B Esplorati:        " + nodes);
-            System.out.println("Ottimo Dimostrato:         " + (optimal ? "SI" : "NO (Timeout)"));
+            System.out.println("Nodi/Stati Valutati:       " + nodes);
+            System.out.println("Ottimo Dimostrato:         " + (optimal ? "SI" : "NO (Euristico / Timeout)"));
         }
 
         System.out.print("Verifica BFS Grafo:        ");
